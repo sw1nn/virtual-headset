@@ -55,6 +55,7 @@ The `virtual-headset-ctl` utility provides convenient commands:
 | ------------------------------------------------ | ------------------------------------------------------ |
 | `mute` / `unmute` / `toggle-mute`                | Set mute state (via HID OUTPUT report — most reliable) |
 | `mute-dbus` / `unmute-dbus` / `toggle-mute-dbus` | Same, via D-Bus                                        |
+| `ptt-press` / `ptt-release`                      | Push-to-talk key down/up: hold to talk, tap to latch   |
 | `get-source`                                     | Description of the source currently being forwarded    |
 | `list-sources`                                   | Forwardable input sources as JSON (for pickers)        |
 | `set-source <name>`                              | Forward a specific source (restarts the service)       |
