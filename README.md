@@ -1,22 +1,24 @@
 # 🎧 Virtual Headset
 
-[![CI](https://github.com/xav-ie/virtual-headset/actions/workflows/ci.yml/badge.svg)](https://github.com/xav-ie/virtual-headset/actions/workflows/ci.yml)
+[![CI](https://github.com/sw1nn/virtual-headset/actions/workflows/ci.yml/badge.svg)](https://github.com/sw1nn/virtual-headset/actions/workflows/ci.yml)
 
-**A software mute button for any microphone on Linux — that Zoom and Google Meet actually respect.**
+**A software mute button for any microphone on Linux — that Zoom, Google Meet and Microsoft Teams actually respect.**
 
 Your mic probably doesn't have a mute button. Virtual Headset gives it one:
 press a key (or click your status bar, or your browser toolbar) and your call
-mutes — and when you mute inside Zoom or Meet, everything else follows. It works
-because the call apps see a real telephony headset, not a script poking at them.
+mutes — and when you mute inside Zoom, Meet or Teams, everything else follows. It
+works because the call apps see a real telephony headset, not a script poking at
+them.
 
 <!-- TODO: drop a short screen recording / screenshot here (panel + bar + browser icon) -->
 
 ## Features
 
 - **Mute button for any mic** — no special hardware; use the microphone you already have.
-- **Speaks Zoom & Meet's language** — appears as a real USB telephony headset, so their own mute button stays in sync with yours, both ways.
-- **Mute from anywhere** — a keyboard shortcut, a click in your status bar, your browser toolbar, or D-Bus.
-- **Works in Firefox too** — a small extension bridges the web apps (Firefox has no WebHID), so mute syncs in the browser as well as the desktop client.
+- **Speaks Zoom, Meet & Teams' language** — appears as a real USB telephony headset, so their own mute button stays in sync with yours, both ways.
+- **Mute from anywhere** — a keyboard shortcut, a foot pedal, a click in your status bar, your browser toolbar, or D-Bus.
+- **Works in Firefox too** — a small extension bridges the web apps (Firefox has no WebHID), so mute syncs in the browser as well as the desktop client. Teams has no WebHID support in any browser, so Teams always uses this bridge.
+- **Push-to-talk** — hold a foot pedal to talk; release to mute. A short tap latches the mic open until the next press.
 - **Pick which mic to use** — choose the forwarded source from a desktop panel, the browser menu, or the CLI.
 - **Safe by default** — starts muted, so you're never accidentally live right after login.
 - **Status-bar ready** — Waybar, i3, Polybar, plus a built-in desktop panel.
@@ -27,12 +29,13 @@ because the call apps see a real telephony headset, not a script poking at them.
 Virtual Headset creates two things:
 
 1. a **virtual microphone** that forwards your real mic through PipeWire, and
-2. a **virtual USB telephony headset** that Zoom and Google Meet recognize.
+2. a **virtual USB telephony headset** that Zoom, Google Meet and Microsoft Teams recognize.
 
 Because conferencing apps trust headset mute buttons, you can now mute from your
-keyboard, status bar, or browser — and because the connection is two-way, muting
-inside the app updates your indicators too. The actual audio is muted by the app
-(just like a real headset), so there's nothing system-wide to clean up.
+keyboard, foot pedal, status bar, or browser — and because the connection is
+two-way, muting inside the app updates your indicators too. The actual audio is
+muted by the app (just like a real headset), so there's nothing system-wide to
+clean up.
 
 → Full details in [docs/architecture.md](./docs/architecture.md).
 
@@ -40,7 +43,7 @@ inside the app updates your indicators too. The actual audio is muted by the app
 
 ```nix
 {
-  inputs.virtual-headset.url = "github:xav-ie/virtual-headset";
+  inputs.virtual-headset.url = "github:sw1nn/virtual-headset";
 
   # in your NixOS configuration:
   imports = [ inputs.virtual-headset.nixosModules.default ];
@@ -49,8 +52,8 @@ inside the app updates your indicators too. The actual audio is muted by the app
 ```
 
 That's it — the service starts at login (muted), creates
-`Virtual_Headset_Microphone`, and sets up device permissions. In Zoom/Meet,
-choose **Virtual_Headset_Microphone** as your input.
+`Virtual_Headset_Microphone`, and sets up device permissions. In Zoom, Meet or
+Teams, choose **Virtual_Headset_Microphone** as your input.
 
 Not on Nix, or want the Home Manager / Waybar / browser pieces? See the
 [installation guide](./docs/installation.md).
@@ -60,6 +63,7 @@ Not on Nix, or want the Home Manager / Waybar / browser pieces? See the
 | Where             | How                                                                               |
 | ----------------- | --------------------------------------------------------------------------------- |
 | **Keyboard**      | Bind a key to `virtual-headset-ctl toggle-mute`                                   |
+| **Foot pedal**    | `virtual-headset-ctl ptt-down` on press, `ptt-up` on release                      |
 | **Status bar**    | [Waybar / i3 / Polybar modules](./docs/status-bar.md)                             |
 | **Desktop panel** | A built-in [AGS panel](./docs/status-bar.md#desktop-panel) — mute + source picker |
 | **Browser**       | A [Firefox extension](./docs/browser-extension.md) — toolbar mute + source menu   |
@@ -69,7 +73,7 @@ Not on Nix, or want the Home Manager / Waybar / browser pieces? See the
 
 - [Installation](./docs/installation.md) — Nix modules, building from source, requirements, device permissions
 - [Usage & control](./docs/usage.md) — `virtual-headset-ctl`, D-Bus, and HID reference
-- [Browser extension](./docs/browser-extension.md) — Firefox bridge for Zoom/Meet web apps
+- [Browser extension](./docs/browser-extension.md) — Firefox bridge for Zoom/Meet/Teams web apps
 - [Status bar & desktop panel](./docs/status-bar.md) — Waybar/i3/Polybar and the AGS panel
 - [How it works](./docs/architecture.md) — architecture and the technical details
 - [Troubleshooting](./docs/troubleshooting.md)

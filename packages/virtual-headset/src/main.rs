@@ -7,6 +7,7 @@ use crossterm::{
 use std::fs::File;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 use uhid_virt::{Bus, CreateParams, OutputEvent, StreamError, UHIDDevice};
 
 mod hid_descriptor;
@@ -29,18 +30,79 @@ macro_rules! print_msg {
     };
 }
 
+/// Commands that change the mute state. They arrive from D-Bus (the CLI and
+/// status bars) and from HID output reports (external tools writing report 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    Toggle,
+    Mute,
+    Unmute,
+    PttDown,
+    PttUp,
+}
+
+/// A tap shorter than this latches the mic open; a longer hold is push-to-talk.
+const PTT_TAP_THRESHOLD: Duration = Duration::from_millis(300);
+
+/// Push-to-talk phases. A press starts a hold; releasing before the threshold
+/// latches the mic open; the next press closes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PttPhase {
+    Idle,
+    Pressed(Instant),
+    Latched,
+    Stopping,
+}
+
 struct DeviceState {
     muted: bool,
+    ptt: PttPhase,
 }
 
 impl DeviceState {
     fn new() -> Self {
         // Start muted so the mic is never hot on (re)start before you opt in.
-        Self { muted: true }
+        Self {
+            muted: true,
+            ptt: PttPhase::Idle,
+        }
     }
 
-    fn toggle_mute(&mut self) {
-        self.muted = !self.muted;
+    /// Handle a push-to-talk key down. Returns the mute state to apply, or
+    /// `None` if the press was a duplicate.
+    fn ptt_down(&mut self) -> Option<bool> {
+        match self.ptt {
+            PttPhase::Latched => {
+                self.ptt = PttPhase::Stopping;
+                Some(true)
+            }
+            PttPhase::Idle => {
+                self.ptt = PttPhase::Pressed(Instant::now());
+                Some(false)
+            }
+            PttPhase::Pressed(_) | PttPhase::Stopping => None,
+        }
+    }
+
+    /// Handle a push-to-talk key up. Returns the mute state to apply, or `None`
+    /// when the mic should stay as it is.
+    fn ptt_up(&mut self) -> Option<bool> {
+        match self.ptt {
+            PttPhase::Stopping => {
+                self.ptt = PttPhase::Idle;
+                None
+            }
+            PttPhase::Pressed(started) => {
+                if started.elapsed() < PTT_TAP_THRESHOLD {
+                    self.ptt = PttPhase::Latched;
+                    None
+                } else {
+                    self.ptt = PttPhase::Idle;
+                    Some(true)
+                }
+            }
+            PttPhase::Idle | PttPhase::Latched => None,
+        }
     }
 }
 
@@ -75,34 +137,31 @@ fn reconcile_link(
     }
 }
 
-/// Apply one mute toggle received over D-Bus: flip the state, gate the audio,
-/// pulse the HID mute button so the host app (Zoom/Meet) sees it, and sync D-Bus
-/// listeners.
+/// Drive the mute state to `muted`: gate the audio, pulse the HID mute button so
+/// the host app (Zoom/Meet/Teams) sees the change, and sync D-Bus listeners.
 ///
 /// The audio relink happens first, before the 50ms HID button pulse, so an
 /// unmute is audible in ~16ms instead of waiting out the pulse — the host
 /// notification is not on the audio path and can lag a few ms.
-fn apply_dbus_toggle(
+fn apply_mute(
     state: &mut DeviceState,
+    muted: bool,
     device: &mut UHIDDevice<File>,
     dbus: &Option<DBusService>,
     is_interactive: bool,
     source_name: &str,
     processing_linked: &mut Option<bool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    state.toggle_mute();
+    if state.muted == muted {
+        return Ok(());
+    }
+    state.muted = muted;
 
-    reconcile_link(source_name, state.muted, processing_linked, is_interactive);
-
-    print_msg!(
-        is_interactive,
-        "D-Bus toggle received, muting: {}",
-        state.muted
-    );
+    reconcile_link(source_name, muted, processing_linked, is_interactive);
 
     // Send HID mute button pulse (0→1→0 toggles mute state); hook bit stays 1.
     device.write(&[0x01, 0x03])?; // hook=1, mute=1
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    std::thread::sleep(Duration::from_millis(50));
     device.write(&[0x01, 0x01])?; // hook=1, mute=0
 
     if let Some(dbus) = dbus {
@@ -117,6 +176,38 @@ fn apply_dbus_toggle(
         "Mute state updated to: {}",
         if state.muted { "ON" } else { "OFF" }
     );
+    Ok(())
+}
+
+/// Apply one [`Command`]: resolve the target mute state (push-to-talk commands
+/// own their own phase state) and drive the device and audio graph to it.
+fn apply_command(
+    state: &mut DeviceState,
+    command: Command,
+    device: &mut UHIDDevice<File>,
+    dbus: &Option<DBusService>,
+    is_interactive: bool,
+    source_name: &str,
+    processing_linked: &mut Option<bool>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let target = match command {
+        Command::Toggle => Some(!state.muted),
+        Command::Mute => Some(true),
+        Command::Unmute => Some(false),
+        Command::PttDown => state.ptt_down(),
+        Command::PttUp => state.ptt_up(),
+    };
+    if let Some(muted) = target {
+        apply_mute(
+            state,
+            muted,
+            device,
+            dbus,
+            is_interactive,
+            source_name,
+            processing_linked,
+        )?;
+    }
     Ok(())
 }
 
@@ -169,11 +260,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✓ HID device created successfully!");
     println!("  Check /dev/hidraw* for the new device\n");
 
-    // Create channel for D-Bus toggle commands
-    let (toggle_tx, toggle_rx) = unbounded();
+    // Create channel for D-Bus commands (mute/toggle/push-to-talk)
+    let (command_tx, command_rx) = unbounded();
 
     // Initialize D-Bus service for status bar integration
-    let dbus = match DBusService::new(toggle_tx) {
+    let dbus = match DBusService::new(command_tx) {
         Ok(dbus) => {
             println!("✓ D-Bus service registered: com.github.virtual_headset");
             Some(dbus)
@@ -240,7 +331,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main event loop
     while running.load(Ordering::SeqCst) {
-        // Wait for the next D-Bus toggle. In daemon mode we BLOCK on the channel
+        // Wait for the next D-Bus command. In daemon mode we BLOCK on the channel
         // (with a 100ms cap so HID events still get serviced) instead of
         // busy-polling + sleeping — so an unmute from the panel/CLI wakes us
         // instantly (~16ms resume) rather than waiting out a poll interval. The
@@ -248,9 +339,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // never has to know about D-Bus specifically. In interactive mode the
         // keyboard poll below sets the cadence, so we just drain non-blocking.
         if !is_interactive {
-            match toggle_rx.recv_timeout(std::time::Duration::from_millis(100)) {
-                Ok(()) => apply_dbus_toggle(
+            match command_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                Ok(command) => apply_command(
                     &mut state,
+                    command,
                     &mut device,
                     &dbus,
                     is_interactive,
@@ -258,7 +350,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &mut processing_linked,
                 )?,
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-                // D-Bus unavailable (registration failed): no toggles will ever
+                // D-Bus unavailable (registration failed): no commands will ever
                 // arrive, so recv returns instantly — sleep to avoid busy-spin
                 // while HID-driven mute still works via device.read() below.
                 Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
@@ -266,17 +358,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        // Drain any further queued toggles (and all of them in interactive mode).
-        while let Ok(()) = toggle_rx.try_recv() {
-            apply_dbus_toggle(
+        // Drain any further queued commands (and all of them in interactive mode).
+        while let Ok(command) = command_rx.try_recv() {
+            apply_command(
                 &mut state,
+                command,
                 &mut device,
                 &dbus,
                 is_interactive,
                 &source.name,
                 &mut processing_linked,
             )?;
-            // Don't let a burst of queued toggles (each sleeping 50ms in the HID
+            // Don't let a burst of queued commands (each sleeping 50ms in the HID
             // pulse) delay shutdown.
             if !running.load(Ordering::SeqCst) {
                 break;
@@ -284,8 +377,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Backstop reconcile for mute changes that don't go through
-        // `apply_dbus_toggle` (keyboard 'm', host-driven HID mute below), and a
-        // retry for any gate that previously failed to apply. The D-Bus path
+        // `apply_command` (keyboard 'm', host-driven HID mute below), and a
+        // retry for any gate that previously failed to apply. The command path
         // already relinked above, so this only acts on a real divergence.
         reconcile_link(
             &source.name,
@@ -308,25 +401,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     running.store(false, Ordering::SeqCst);
                 }
                 KeyCode::Char('m') | KeyCode::Char('M') => {
-                    state.toggle_mute();
-
                     print!("Keyboard toggle, ");
-
-                    // Send HID mute button pulse (0→1→0 toggles mute state)
-                    // Hook bit stays 1 (off-hook) throughout
-                    device.write(&[0x01, 0x03])?; // hook=1, mute=1
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    device.write(&[0x01, 0x01])?; // hook=1, mute=0
-
-                    // Update D-Bus and send signal
-                    if let Some(ref dbus) = dbus {
-                        dbus.state().set(state.muted);
-                        if let Err(e) = dbus.notify_mute_changed(state.muted) {
-                            print_msg!(is_interactive, "D-Bus signal error: {}", e);
-                        }
-                    }
-
-                    print!("Mute: {}\r\n", if state.muted { "ON" } else { "OFF" });
+                    apply_command(
+                        &mut state,
+                        Command::Toggle,
+                        &mut device,
+                        &dbus,
+                        is_interactive,
+                        &source.name,
+                        &mut processing_linked,
+                    )?;
                 }
                 KeyCode::Char('q') | KeyCode::Char('Q') => {
                     running.store(false, Ordering::SeqCst);
@@ -354,8 +438,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let hook = (data[1] & 0x02) != 0;
                             let ring = (data[1] & 0x04) != 0;
 
-                            // Sync internal state with what host requested
-                            state.muted = mute_led;
+                            // Sync internal state with what host requested. This
+                            // is the app-to-headset direction: if the user clicks
+                            // mute in the meeting UI, cut the audio gate now.
+                            if state.muted != mute_led {
+                                state.muted = mute_led;
+                                reconcile_link(
+                                    &source.name,
+                                    state.muted,
+                                    &mut processing_linked,
+                                    is_interactive,
+                                );
+                            }
 
                             // Update D-Bus state and notify listeners
                             if let Some(ref dbus) = dbus {
@@ -375,57 +469,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         // Handle control command OUTPUT (report ID 3)
                         else if data[0] == 0x03 {
-                            let command = data[1];
-                            match command {
-                                0x01 if !state.muted => {
-                                    // Mute command
-                                    state.toggle_mute();
-                                    print_msg!(is_interactive, "← OUTPUT: mute command");
-
-                                    // Send INPUT report
-                                    device.write(&[0x01, 0x03])?;
-                                    std::thread::sleep(std::time::Duration::from_millis(50));
-                                    device.write(&[0x01, 0x01])?;
-
-                                    // Update D-Bus
-                                    if let Some(ref dbus) = dbus {
-                                        dbus.state().set(state.muted);
-                                        let _ = dbus.notify_mute_changed(state.muted);
-                                    }
-                                }
-                                0x02 if state.muted => {
-                                    // Unmute command
-                                    state.toggle_mute();
-                                    print_msg!(is_interactive, "← OUTPUT: unmute command");
-
-                                    // Send INPUT report
-                                    device.write(&[0x01, 0x03])?;
-                                    std::thread::sleep(std::time::Duration::from_millis(50));
-                                    device.write(&[0x01, 0x01])?;
-
-                                    // Update D-Bus
-                                    if let Some(ref dbus) = dbus {
-                                        dbus.state().set(state.muted);
-                                        let _ = dbus.notify_mute_changed(state.muted);
-                                    }
-                                }
-                                0x03 => {
-                                    // Toggle command
-                                    state.toggle_mute();
-                                    print_msg!(is_interactive, "← OUTPUT: toggle command");
-
-                                    // Send INPUT report
-                                    device.write(&[0x01, 0x03])?;
-                                    std::thread::sleep(std::time::Duration::from_millis(50));
-                                    device.write(&[0x01, 0x01])?;
-
-                                    // Update D-Bus
-                                    if let Some(ref dbus) = dbus {
-                                        dbus.state().set(state.muted);
-                                        let _ = dbus.notify_mute_changed(state.muted);
-                                    }
-                                }
-                                _ => {}
+                            let command = match data[1] {
+                                0x01 => Some(Command::Mute),
+                                0x02 => Some(Command::Unmute),
+                                0x03 => Some(Command::Toggle),
+                                _ => None,
+                            };
+                            if let Some(command) = command {
+                                print_msg!(is_interactive, "← OUTPUT: {:?} command", command);
+                                apply_command(
+                                    &mut state,
+                                    command,
+                                    &mut device,
+                                    &dbus,
+                                    is_interactive,
+                                    &source.name,
+                                    &mut processing_linked,
+                                )?;
                             }
                         }
                     }
@@ -455,57 +515,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Handle feature report control commands
                         if report_type == ReportType::Feature && data.len() >= 2 && data[0] == 0x03
                         {
-                            let command = data[1];
-                            match command {
-                                0x01 if !state.muted => {
-                                    // Mute command
-                                    state.toggle_mute();
-                                    print_msg!(is_interactive, "← FEATURE: mute command");
-
-                                    // Send INPUT report
-                                    device.write(&[0x01, 0x03])?;
-                                    std::thread::sleep(std::time::Duration::from_millis(50));
-                                    device.write(&[0x01, 0x01])?;
-
-                                    // Update D-Bus
-                                    if let Some(ref dbus) = dbus {
-                                        dbus.state().set(state.muted);
-                                        let _ = dbus.notify_mute_changed(state.muted);
-                                    }
-                                }
-                                0x02 if state.muted => {
-                                    // Unmute command
-                                    state.toggle_mute();
-                                    print_msg!(is_interactive, "← FEATURE: unmute command");
-
-                                    // Send INPUT report
-                                    device.write(&[0x01, 0x03])?;
-                                    std::thread::sleep(std::time::Duration::from_millis(50));
-                                    device.write(&[0x01, 0x01])?;
-
-                                    // Update D-Bus
-                                    if let Some(ref dbus) = dbus {
-                                        dbus.state().set(state.muted);
-                                        let _ = dbus.notify_mute_changed(state.muted);
-                                    }
-                                }
-                                0x03 => {
-                                    // Toggle command
-                                    state.toggle_mute();
-                                    print_msg!(is_interactive, "← FEATURE: toggle command");
-
-                                    // Send INPUT report
-                                    device.write(&[0x01, 0x03])?;
-                                    std::thread::sleep(std::time::Duration::from_millis(50));
-                                    device.write(&[0x01, 0x01])?;
-
-                                    // Update D-Bus
-                                    if let Some(ref dbus) = dbus {
-                                        dbus.state().set(state.muted);
-                                        let _ = dbus.notify_mute_changed(state.muted);
-                                    }
-                                }
-                                _ => {}
+                            let command = match data[1] {
+                                0x01 => Some(Command::Mute),
+                                0x02 => Some(Command::Unmute),
+                                0x03 => Some(Command::Toggle),
+                                _ => None,
+                            };
+                            if let Some(command) = command {
+                                print_msg!(is_interactive, "← FEATURE: {:?} command", command);
+                                apply_command(
+                                    &mut state,
+                                    command,
+                                    &mut device,
+                                    &dbus,
+                                    is_interactive,
+                                    &source.name,
+                                    &mut processing_linked,
+                                )?;
                             }
                         }
 
@@ -555,4 +581,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ptt_hold_unmutes_then_mutes_on_release() {
+        let mut state = DeviceState::new();
+        assert_eq!(state.ptt_down(), Some(false));
+        state.ptt = PttPhase::Pressed(Instant::now() - Duration::from_millis(400));
+        assert_eq!(state.ptt_up(), Some(true));
+        assert_eq!(state.ptt, PttPhase::Idle);
+    }
+
+    #[test]
+    fn ptt_tap_latches_the_mic_open() {
+        let mut state = DeviceState::new();
+        assert_eq!(state.ptt_down(), Some(false));
+        assert_eq!(state.ptt_up(), None);
+        assert_eq!(state.ptt, PttPhase::Latched);
+    }
+
+    #[test]
+    fn pressing_again_closes_a_latched_mic() {
+        let mut state = DeviceState::new();
+        state.ptt = PttPhase::Latched;
+        assert_eq!(state.ptt_down(), Some(true));
+        assert_eq!(state.ptt, PttPhase::Stopping);
+        assert_eq!(state.ptt_up(), None);
+        assert_eq!(state.ptt, PttPhase::Idle);
+    }
+
+    #[test]
+    fn duplicate_key_events_are_ignored() {
+        let mut state = DeviceState::new();
+        assert_eq!(state.ptt_down(), Some(false));
+        assert_eq!(state.ptt_down(), None);
+        assert_eq!(state.ptt_up(), None); // tap => latched
+        assert_eq!(state.ptt, PttPhase::Latched);
+        assert_eq!(state.ptt_up(), None); // key up without a new press
+        assert_eq!(state.ptt, PttPhase::Latched);
+    }
 }

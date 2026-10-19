@@ -89,7 +89,7 @@ in
 
     extensionUrl = lib.mkOption {
       type = lib.types.str;
-      default = "https://github.com/xav-ie/virtual-headset/releases/latest/download/virtual_headset.xpi";
+      default = "https://github.com/sw1nn/virtual-headset/releases/latest/download/virtual_headset.xpi";
       description = ''
         URL of the signed `.xpi` used by the force-install policy when
         `installExtension` is set. Defaults to the latest GitHub release asset.

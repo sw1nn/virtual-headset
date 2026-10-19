@@ -69,7 +69,7 @@ stdenvNoCC.mkDerivation {
   passthru.extensionId = extId;
 
   meta = with lib; {
-    description = "Firefox extension bridging the virtual headset to Zoom/Meet web apps";
+    description = "Firefox extension bridging the virtual headset to Zoom/Meet/Teams web apps";
     license = licenses.mit;
     platforms = platforms.all;
   };

@@ -11,10 +11,23 @@ describe("pickAdapter", () => {
     expect(pickAdapter("meet.google.com")).toBe(ADAPTERS.meet);
   });
 
+  it("selects the teams adapter for Teams hosts and subdomains", () => {
+    expect(pickAdapter("teams.microsoft.com")).toBe(ADAPTERS.teams);
+    expect(pickAdapter("eu.teams.microsoft.com")).toBe(ADAPTERS.teams);
+    expect(pickAdapter("teams.live.com")).toBe(ADAPTERS.teams);
+    expect(pickAdapter("teams.cloud.microsoft")).toBe(ADAPTERS.teams);
+    expect(pickAdapter("teams.microsoft.us")).toBe(ADAPTERS.teams);
+    expect(pickAdapter("teams.microsoft.com.mcas.ms")).toBe(ADAPTERS.teams);
+    expect(pickAdapter("teams.microsoft.us.mcas-gov.us")).toBe(ADAPTERS.teams);
+  });
+
   it("returns null for unsupported / look-alike hosts", () => {
     expect(pickAdapter("example.com")).toBeNull();
     expect(pickAdapter("zoom.us.evil.com")).toBeNull();
+    expect(pickAdapter("evilzoom.us")).toBeNull();
     expect(pickAdapter("meet.google.com.evil.com")).toBeNull();
+    expect(pickAdapter("teams.microsoft.com.evil.com")).toBeNull();
+    expect(pickAdapter("noteams.microsoft.com")).toBeNull();
   });
 });
 
@@ -74,5 +87,54 @@ describe("meet adapter", () => {
     const el = ADAPTERS.meet.find()!;
     expect(el).not.toBeNull();
     expect(ADAPTERS.meet.isMuted(el)).toBe(true);
+  });
+});
+
+describe("teams adapter", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("reads muted from #microphone-button data-state=mic-off", () => {
+    document.body.innerHTML = `<button id="microphone-button" data-state="mic-off">x</button>`;
+    const el = ADAPTERS.teams.find()!;
+    expect(el).not.toBeNull();
+    expect(ADAPTERS.teams.isMuted(el)).toBe(true);
+  });
+
+  it("accepts the alternate data-state=muted spelling", () => {
+    document.body.innerHTML = `<button id="microphone-button" data-state="muted">x</button>`;
+    const el = ADAPTERS.teams.find()!;
+    expect(ADAPTERS.teams.isMuted(el)).toBe(true);
+  });
+
+  it("reads unmuted from #microphone-button data-state=mic-on", () => {
+    document.body.innerHTML = `<button id="microphone-button" data-state="mic-on">x</button>`;
+    const el = ADAPTERS.teams.find()!;
+    expect(el).not.toBeNull();
+    expect(ADAPTERS.teams.isMuted(el)).toBe(false);
+  });
+
+  it("finds the button by data-tid when the id is absent", () => {
+    document.body.innerHTML = `<button data-tid="toggle-mute" data-state="mic-off">x</button>`;
+    const el = ADAPTERS.teams.find()!;
+    expect(el).not.toBeNull();
+    expect(ADAPTERS.teams.isMuted(el)).toBe(true);
+  });
+
+  it("falls back to aria-label when data-state is absent", () => {
+    document.body.innerHTML = `<button aria-label="Unmute">x</button>`;
+    const el = ADAPTERS.teams.find()!;
+    expect(el).not.toBeNull();
+    expect(ADAPTERS.teams.isMuted(el)).toBe(true);
+
+    document.body.innerHTML = `<button aria-label="Mute">x</button>`;
+    const unmuted = ADAPTERS.teams.find()!;
+    expect(ADAPTERS.teams.isMuted(unmuted)).toBe(false);
+  });
+
+  it("find() returns null when there is no mic button", () => {
+    document.body.innerHTML = `<button aria-label="Leave">x</button>`;
+    expect(ADAPTERS.teams.find()).toBeNull();
   });
 });

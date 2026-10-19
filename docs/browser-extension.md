@@ -3,27 +3,31 @@
 Chromium-based browsers expose the virtual HID device to web pages through
 WebHID, so Zoom/Meet web apps work with it directly. **Firefox does not
 implement WebHID**, so the web apps never see the virtual headset there.
+**Microsoft Teams does not consume WebHID in any browser**, so Teams web always
+needs the extension bridge, even in Chromium.
 
 This repo ships a small Firefox extension plus a native-messaging host
 (`virtual-headset-bridge`) that talks to the daemon over D-Bus, keeping mute (and
 the audio source) in sync in the browser — **both ways**:
 
-- Press your keyboard/status-bar mute and the Zoom/Meet tab mutes (the extension
-  clicks its mic button).
-- Mute from Zoom/Meet's own UI and your status bar / headset indicator follow.
+- Press your keyboard/foot-pedal mute and the Zoom/Meet/Teams tab mutes (the
+  extension clicks its mic button).
+- Mute from Zoom/Meet/Teams' own UI and your status bar / headset indicator
+  follow.
 
 ```mermaid
 graph LR
-    Key["mute key / virtual-headset-ctl"] --> Daemon[virtual-headset daemon]
+    Key["mute key / foot pedal / virtual-headset-ctl"] --> Daemon[virtual-headset daemon]
     Daemon -->|"MuteChanged signal"| DBus[D-Bus]
     DBus <--> Bridge["virtual-headset-bridge<br/>(native-messaging host)"]
     Bridge <-->|stdio JSON| Ext[Firefox extension]
-    Ext <-->|"read state / click mute"| Web["Zoom / Meet web tab"]
+    Ext <-->|"read state / click mute"| Web["Zoom / Meet / Teams web tab"]
 ```
 
 > [!NOTE]
 > For the **native** Zoom desktop client, the existing HID path already works and
-> the extension isn't needed.
+> the extension isn't needed. For Teams, the extension is required unless you use
+> the installed Teams client on Windows or Mac.
 
 ## Using it
 
@@ -72,8 +76,8 @@ signed by CI, not by hand.
 
 ```bash
 # Mozilla AMO API key (https://addons.mozilla.org/developers/addon/api/key/) — signs the .xpi
-gh secret set AMO_JWT_ISSUER --repo xav-ie/virtual-headset
-gh secret set AMO_JWT_SECRET --repo xav-ie/virtual-headset
+gh secret set AMO_JWT_ISSUER --repo sw1nn/virtual-headset
+gh secret set AMO_JWT_SECRET --repo sw1nn/virtual-headset
 ```
 
 `version.yml` authenticates as a **GitHub App** (so the Version PR is opened by a
@@ -82,8 +86,8 @@ cannot). Create an app with Contents + Pull requests = read/write, install it on
 the repo, then store:
 
 ```bash
-gh secret set APP_ID --repo xav-ie/virtual-headset --body "<app id>"
-gh secret set APP_PRIVATE_KEY --repo xav-ie/virtual-headset < /path/to/key.pem
+gh secret set APP_ID --repo sw1nn/virtual-headset --body "<app id>"
+gh secret set APP_PRIVATE_KEY --repo sw1nn/virtual-headset < /path/to/key.pem
 ```
 
 **Per change:** add a changeset describing it, and commit the generated file:
@@ -115,7 +119,7 @@ extension/static/install-native-host.sh \
 
 # 3a. Install the extension permanently: download virtual_headset.xpi from the
 #     latest GitHub release and open it in Firefox (it's Mozilla-signed).
-#     https://github.com/xav-ie/virtual-headset/releases/latest
+#     https://github.com/sw1nn/virtual-headset/releases/latest
 #
 # 3b. ...or build the dev extension and load extension/dist/manifest.json via
 #     about:debugging (temporary; resets on restart):
@@ -130,7 +134,8 @@ on its `PATH` (the Nix package wires this up automatically).
 - **`extension/`** — a TypeScript WebExtension bundled with esbuild.
   `src/background.ts` is the reconciler (keeps a single agreed state and ignores
   changes that echo its own action, so the two sides converge without feedback
-  loops); `src/content.ts` holds the per-site DOM adapters for Zoom + Meet.
+  loops); `src/content.ts` holds the per-site DOM adapters for Zoom, Meet and
+  Teams.
 - **`virtual-headset-bridge`** — a second binary in the `virtual-headset` crate
   ([`src/bin/virtual-headset-bridge.rs`](../packages/virtual-headset/src/bin/virtual-headset-bridge.rs))
   that speaks the WebExtension native-messaging protocol on stdio, relays mute
@@ -139,7 +144,8 @@ on its `PATH` (the Nix package wires this up automatically).
 
 ## Maintaining the site adapters
 
-Zoom and Meet change their DOM without notice. If sync stops working, update the
-adapters in [`extension/src/content.ts`](../extension/src/content.ts) — each one
-just needs to find the mic button and read whether it currently means "muted".
+Zoom, Meet and Teams change their DOM without notice. If sync stops working,
+update the adapters in [`extension/src/adapters.ts`](../extension/src/adapters.ts)
+— each one just needs to find the mic button and read whether it currently means
+"muted".
 Type-check and rebuild with `npm run check` inside `extension/`.

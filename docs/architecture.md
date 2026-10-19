@@ -15,7 +15,7 @@ graph TB
     Daemon -->|Creates & forwards audio| VirtMic[Virtual_Headset_Mic]
     Daemon -->|Emits signals| DBus[D-Bus]
 
-    VirtMic -->|Audio input| Apps[Zoom / Meet]
+    VirtMic -->|Audio input| Apps[Zoom / Meet / Teams]
     VirtHID -->|HID Input Reports| Apps
     Apps -->|HID Output Reports| VirtHID
 ```
@@ -25,7 +25,8 @@ graph TB
 - The daemon creates a virtual HID device that apps connect to (over WebHID in
   Chromium; via the [browser extension](./browser-extension.md) in Firefox).
 - Apps receive mute-button events via HID Input Reports and send LED states back
-  via HID Output Reports.
+  via HID Output Reports. Teams never consumes WebHID, so it always uses the
+  browser-extension bridge.
 
 ## Control flow
 

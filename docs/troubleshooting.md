@@ -1,6 +1,6 @@
 # Troubleshooting
 
-## Device not showing in Zoom/Meet
+## Device not showing in Zoom/Meet/Teams
 
 1. Check the device was created:
 
@@ -40,8 +40,23 @@
 - Make sure the daemon is running and on the bus
   (`systemctl --user status virtual-headset`).
 - Open the meeting tab's devtools console and look for `[vh]` log lines.
-- Zoom/Meet may have changed their DOM — see [maintaining the site
+- Zoom/Meet/Teams may have changed their DOM — see [maintaining the site
   adapters](./browser-extension.md#maintaining-the-site-adapters).
+
+## Push-to-talk mutes the whole system
+
+Linux maps HID Telephony `Phone Mute` to `KEY_MICMUTE`, so the virtual headset
+also reaches the desktop as `XF86AudioMicMute`. If you still have a system-mute
+binding on that key, it will fire as well (and can recurse into the PTT command).
+
+- Remove the old system-mute binding, or
+- keep the virtual input device away from libinput:
+
+  ```udev
+  SUBSYSTEM=="input", ATTRS{name}=="Virtual_Headset", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+  ```
+
+See [Foot pedal / push-to-talk](./usage.md#foot-pedal--push-to-talk).
 
 ## Permission denied errors
 

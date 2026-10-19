@@ -38,7 +38,7 @@ virtual-headset
 ./target/release/virtual-headset
 ```
 
-Then pick your real microphone, and in Zoom/Meet select
+Then pick your real microphone, and in Zoom, Meet or Teams select
 **Virtual_Headset_Microphone** as your input.
 
 ## Controls (interactive)
@@ -55,7 +55,8 @@ The `virtual-headset-ctl` utility provides convenient commands:
 | ------------------------------------------------ | ------------------------------------------------------ |
 | `mute` / `unmute` / `toggle-mute`                | Set mute state (via HID OUTPUT report — most reliable) |
 | `mute-dbus` / `unmute-dbus` / `toggle-mute-dbus` | Same, via D-Bus                                        |
-| `ptt-press` / `ptt-release`                      | Push-to-talk key down/up: hold to talk, tap to latch   |
+| `ptt-down` / `ptt-up`                            | Push-to-talk key down/up: hold to talk, tap to latch   |
+| `ptt-press` / `ptt-release`                      | Backwards-compatible aliases for `ptt-down` / `ptt-up` |
 | `get-source`                                     | Description of the source currently being forwarded    |
 | `list-sources`                                   | Forwardable input sources as JSON (for pickers)        |
 | `set-source <name>`                              | Forward a specific source (restarts the service)       |
@@ -63,6 +64,49 @@ The `virtual-headset-ctl` utility provides convenient commands:
 | `monitor-mute`                                   | Stream mute-state changes as JSON (for status bars)    |
 | `restart-service`                                | Restart the systemd user service                       |
 | `find-device`                                    | Print the hidraw device path                           |
+
+## Foot pedal / push-to-talk
+
+`ptt-down` and `ptt-up` are designed for a momentary foot pedal. The daemon owns
+the press timing, so a daemon restart cannot leave a stale latch file behind:
+
+- **hold longer than 300 ms** — unmute on press, mute on release;
+- **tap shorter than 300 ms** — unmute and latch the mic open until the next
+  press.
+
+Bind both edges of the pedal key. For Hyprland:
+
+```lua
+hl.bind(
+    "XF86AudioMicMute",
+    hl.dsp.exec_cmd("virtual-headset-ctl ptt-down"),
+    { description = "Push-to-talk down" }
+)
+hl.bind(
+    "XF86AudioMicMute",
+    hl.dsp.exec_cmd("virtual-headset-ctl ptt-up"),
+    { release = true, description = "Push-to-talk up" }
+)
+```
+
+> [!IMPORTANT]
+> Linux maps the HID Telephony `Phone Mute` usage to `KEY_MICMUTE`. The virtual
+> headset therefore also emits `XF86AudioMicMute` through the kernel input
+> stack. If you leave an old system-mute binding on that key, it will mute the
+> OS source (and can recurse into the PTT command). Remove the old binding or
+> keep the virtual input device away from libinput:
+>
+> ```udev
+> # /etc/udev/rules.d/99-virtual-headset.rules
+> SUBSYSTEM=="input", ATTRS{name}=="Virtual_Headset", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+> ```
+>
+> Verify the name with `udevadm info -q property -n /dev/input/eventX`. Ignoring
+> the input device does not affect Chrome/WebHID access to the hidraw device.
+
+If you prefer to leave the virtual input device alone, bind the physical pedal by
+keycode instead (for example `code:198` for F20) and do not bind
+`XF86AudioMicMute` at all.
 
 ## D-Bus interface
 
@@ -76,6 +120,7 @@ The `virtual-headset-ctl` utility provides convenient commands:
 - `Mute()` — mute if not already muted
 - `Unmute()` — unmute if currently muted
 - `Toggle()` — toggle the mute state
+- `PttDown()` / `PttUp()` — push-to-talk press/release with tap-to-latch
 
 **Signals**
 
@@ -113,6 +158,25 @@ dbus-send --session --print-reply \
   --dest=com.github.virtual_headset \
   /com/github/virtual_headset \
   com.github.virtual_headset.Mute.Toggle
+```
+
+**Push-to-talk**
+
+```bash
+# Key down / key up, e.g. from a foot pedal binding
+virtual-headset-ctl ptt-down
+virtual-headset-ctl ptt-up
+
+# Or directly over D-Bus
+dbus-send --session \
+  --dest=com.github.virtual_headset \
+  /com/github/virtual_headset \
+  com.github.virtual_headset.Mute.PttDown
+
+dbus-send --session \
+  --dest=com.github.virtual_headset \
+  /com/github/virtual_headset \
+  com.github.virtual_headset.Mute.PttUp
 ```
 
 **Query current state**

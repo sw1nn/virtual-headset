@@ -69,7 +69,12 @@ import { pickAdapter } from "./adapters";
       subtree: true,
       childList: true,
       attributes: true,
-      attributeFilter: ["aria-label", "data-is-muted"],
+      attributeFilter: [
+        "aria-label",
+        "aria-pressed",
+        "data-is-muted",
+        "data-state",
+      ],
     });
   }
 

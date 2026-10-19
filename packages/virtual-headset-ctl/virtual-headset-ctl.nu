@@ -46,42 +46,34 @@ def "main toggle-mute" [] {
   0x[03 03] | save --raw --force $device
 }
 
-# Push-to-talk state shared by ptt-press and ptt-release: the press time in
-# nanoseconds, "latched" (a tap left the mic open) or "stopping" (the press
-# that closes it).
-def ptt-state-path [] {
-  $env.XDG_RUNTIME_DIR? | default "/tmp" | path join "virtual-headset-ptt"
+# Call a push-to-talk method on the daemon. The daemon owns the press/latch
+# timing, so a daemon restart cannot leave stale state behind in a runtime file.
+def ptt-call [method: string] {
+  (^dbus-send --session
+    --type=method_call
+    --dest=com.github.virtual_headset
+    /com/github/virtual_headset
+    $"com.github.virtual_headset.Mute.($method)")
 }
 
-# Push-to-talk key down: unmute, or mute if a tap left the mic open
+# Push-to-talk key down: unmute, or mute if a tap left the mic open.
+def "main ptt-down" [] {
+  ptt-call "PttDown"
+}
+
+# Push-to-talk key up: mute after a hold; a tap under 300 ms latches the mic
+# open until the next press.
+def "main ptt-up" [] {
+  ptt-call "PttUp"
+}
+
+# Backwards-compatible names.
 def "main ptt-press" [] {
-  let state = (ptt-state-path)
-  if ($state | path exists) and (open --raw $state | str trim) == "latched" {
-    "stopping" | save --force $state
-    main mute
-    return
-  }
-  date now | into int | into string | save --force $state
-  main unmute
+  ptt-call "PttDown"
 }
 
-# Push-to-talk key up: a tap (under 300 ms) keeps the mic open until the next
-# press, a hold mutes
 def "main ptt-release" [] {
-  let state = (ptt-state-path)
-  let last = if ($state | path exists) { open --raw $state | str trim } else { "" }
-  match $last {
-    "stopping" => { rm --force $state }
-    "" | "latched" => {}
-    _ => {
-      if ((date now | into int) - ($last | into int)) < 300_000_000 {
-        "latched" | save --force $state
-      } else {
-        rm --force $state
-        main mute
-      }
-    }
-  }
+  ptt-call "PttUp"
 }
 
 # Mute via D-Bus

@@ -1,7 +1,7 @@
 # NixOS Module for Virtual Headset
 #
 # This module provides a systemd user service and udev rules for the virtual-headset
-# application, which creates a virtual USB HID telephony headset for Zoom and Google Meet.
+# application, which creates a virtual USB HID telephony headset for Zoom, Google Meet and Microsoft Teams.
 #
 # ## Features
 #
@@ -70,13 +70,18 @@ let
         # Allow browser WebHID access to virtual headset device
         # Matches Jabra vendor (0x0b0e) product (0x245e)
         KERNEL=="hidraw*", KERNELS=="0003:0B0E:245E.*", MODE="0666", TAG+="uaccess"
+
+        # Keep the virtual headset's KEY_MICMUTE away from the compositor.
+        # Linux maps HID Telephony Phone Mute to KEY_MICMUTE; without this the
+        # desktop's XF86AudioMicMute binding fights (or recurses into) push-to-talk.
+        SUBSYSTEM=="input", ATTRS{name}=="Virtual_Headset", ENV{LIBINPUT_IGNORE_DEVICE}="1"
       '';
     destination = "/lib/udev/rules.d/99-virtual-headset.rules";
   };
 in
 {
   options.services.virtual-headset = {
-    enable = lib.mkEnableOption "virtual HID telephony headset for Zoom/Meet";
+    enable = lib.mkEnableOption "virtual HID telephony headset for Zoom/Meet/Teams";
 
     package = lib.mkOption {
       type = lib.types.package;
@@ -135,7 +140,7 @@ in
 
     # Systemd user service
     systemd.user.services.virtual-headset = {
-      description = "Virtual HID telephony headset for Zoom/Meet";
+      description = "Virtual HID telephony headset for Zoom/Meet/Teams";
 
       # Ensure PipeWire is running before starting
       after = [

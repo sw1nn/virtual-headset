@@ -12,7 +12,7 @@ Add the flake input and enable the module:
 
 ```nix
 {
-  inputs.virtual-headset.url = "github:xav-ie/virtual-headset";
+  inputs.virtual-headset.url = "github:sw1nn/virtual-headset";
 
   # in your NixOS configuration:
   imports = [ inputs.virtual-headset.nixosModules.default ];
@@ -89,6 +89,10 @@ KERNEL=="uhid", MODE="0660", GROUP="input", TAG+="uaccess"
 # Allow browser WebHID access to the virtual headset device
 # Matches Jabra vendor (0x0b0e) product (0x245e)
 KERNEL=="hidraw*", KERNELS=="0003:0B0E:245E.*", MODE="0666", TAG+="uaccess"
+
+# Keep the virtual headset's KEY_MICMUTE away from the compositor; otherwise a
+# desktop XF86AudioMicMute binding fights (or recurses into) push-to-talk.
+SUBSYSTEM=="input", ATTRS{name}=="Virtual_Headset", ENV{LIBINPUT_IGNORE_DEVICE}="1"
 ```
 
 Add your user to the `input` group:
