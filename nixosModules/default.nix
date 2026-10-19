@@ -62,20 +62,8 @@ let
 
   udevRules = pkgs.writeTextFile {
     name = "99-virtual-headset.rules";
-    text = # sh
-      ''
-        # Allow access to /dev/uhid for creating virtual HID devices
-        KERNEL=="uhid", MODE="0660", GROUP="input", TAG+="uaccess"
-
-        # Allow browser WebHID access to virtual headset device
-        # Matches Jabra vendor (0x0b0e) product (0x245e)
-        KERNEL=="hidraw*", KERNELS=="0003:0B0E:245E.*", MODE="0666", TAG+="uaccess"
-
-        # Keep the virtual headset's KEY_MICMUTE away from the compositor.
-        # Linux maps HID Telephony Phone Mute to KEY_MICMUTE; without this the
-        # desktop's XF86AudioMicMute binding fights (or recurses into) push-to-talk.
-        SUBSYSTEM=="input", ATTRS{name}=="Virtual_Headset", ENV{LIBINPUT_IGNORE_DEVICE}="1"
-      '';
+    # One source of truth for the rules, shared with the Arch package.
+    text = builtins.readFile ../packaging/arch/99-virtual-headset.rules;
     destination = "/lib/udev/rules.d/99-virtual-headset.rules";
   };
 in

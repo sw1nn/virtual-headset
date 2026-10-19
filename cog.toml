@@ -1,0 +1,30 @@
+# Cocogitto configuration for sw1nn-virtual-headset
+from_latest_tag = false
+ignore_merge_commits = true
+ignore_fixup_commits = true
+disable_changelog = false
+disable_bump_commit = false
+
+# Tag prefix for version tags
+tag_prefix = "v"
+
+# Pre-bump hooks run before creating the version commit. The root package.json
+# is the extension version source of truth; sync-manifest-version.mjs
+# propagates it into the WebExtension manifest, which the Nix package and the
+# Arch package both read.
+pre_bump_hooks = [
+  "npm version {{version}} --no-git-tag-version --allow-same-version",
+  "node scripts/sync-manifest-version.mjs",
+  "sed -i 's/^version = \".*\"/version = \"{{version}}\"/' packages/virtual-headset/Cargo.toml",
+  "cargo update --manifest-path packages/virtual-headset/Cargo.toml",
+  "sed -i 's/^pkgver=.*/pkgver={{version}}/' packaging/arch/PKGBUILD",
+  "sed -i 's/^pkgrel=.*/pkgrel=1/' packaging/arch/PKGBUILD",
+  "git add package.json package-lock.json extension/static/manifest.json packages/virtual-headset/Cargo.toml packages/virtual-headset/Cargo.lock packaging/arch/PKGBUILD",
+]
+
+# Post-bump hooks run after the version commit and tag are created.
+# Packaging (sw1nn-makepkg-chroot + sw1nn-pkg-ctl upload) is handled by the
+# `package` recipe, invoked from `release` after the bump completes. The tag
+# also triggers release.yml in the upstream repo layout, which signs the
+# Firefox extension.
+post_bump_hooks = ["git push", "git push origin v{{version}}"]

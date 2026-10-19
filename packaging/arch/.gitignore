@@ -1,0 +1,6 @@
+pkg/
+src/
+sw1nn-virtual-headset/
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+*.log

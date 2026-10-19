@@ -1,0 +1,12 @@
+[Unit]
+Description=Virtual HID telephony headset for Zoom, Google Meet and Microsoft Teams
+After=pipewire.service pipewire-pulse.service
+Wants=pipewire.service pipewire-pulse.service
+
+[Service]
+ExecStart=/usr/bin/virtual-headset
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

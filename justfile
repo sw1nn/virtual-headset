@@ -13,25 +13,27 @@ check:
 changeset:
     npm run changeset
 
-# local alternative to the Version PR: consume pending changesets, bump + sync
-# the version, commit, push, then tag. The `v*` tag triggers release.yml, which
-# signs the extension with Mozilla (web-ext sign --channel=unlisted) and
-# publishes the signed .xpi + updates.json to GitHub Releases.
-release:
+# Refuse to release from any branch other than main.
+_assert-main:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -n "$(git status --porcelain)" ]; then
-      echo "error: working tree is dirty; commit or stash first" >&2
-      exit 1
+    branch=$(git branch --show-current)
+    if [ "$branch" != "main" ]; then
+        echo "ERROR: releases can only be run from main (currently on '$branch')" >&2
+        exit 1
     fi
-    # changeset version (bump + CHANGELOG) -> sync manifest.json -> refresh lock.
-    npm run version
-    git add package.json package-lock.json CHANGELOG.md \
-      extension/static/manifest.json .changeset
-    git commit -m "chore: version packages"
-    git push
-    # tag-release.mjs creates v<version> and pushes it (idempotent).
-    npm run tag
+
+# Bump the version, tag, run the release hooks (see cog.toml), then package.
+release type='auto': _assert-main && package
+    cog bump --{{ type }}
+
+# Build the Arch package in a clean chroot and upload the current version.
+package:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pkgver=$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)
+    sw1nn-makepkg-chroot -C packaging/arch
+    sw1nn-pkg-ctl upload packaging/arch/*-"$pkgver"-*.pkg.tar.zst
 
 # show flake outputs
 show:

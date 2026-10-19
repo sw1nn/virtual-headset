@@ -1,0 +1,86 @@
+# Maintainer: Neale Swinnerton <neale@sw1nn.com>
+pkgname=sw1nn-virtual-headset
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="Virtual HID telephony headset for Zoom, Google Meet and Microsoft Teams"
+arch=('x86_64' 'aarch64')
+url="https://github.com/sw1nn/virtual-headset"
+license=('MIT')
+depends=('pipewire' 'pipewire-audio' 'pipewire-pulse' 'libpulse' 'dbus' 'nushell')
+makedepends=('cargo' 'git' 'esbuild' 'zip')
+optdepends=('firefox: Firefox extension bridge for Zoom, Meet and Teams web apps')
+provides=('virtual-headset')
+conflicts=('virtual-headset' 'virtual-headset-git')
+install=${pkgname}.install
+source=(
+  "$pkgname::git+https://github.com/sw1nn/virtual-headset.git#tag=v$pkgver"
+  '99-virtual-headset.rules'
+  'virtual-headset.service'
+)
+sha256sums=(
+  'SKIP'
+  'c5a8c2ad6bfae1fafa44b6ac2a9b53b7c1e116381314147b26de8821188e6e6c'
+  'd75dbca1d88143ef986d2a998482182422b307ae13cd2f0d498836d58e694ffe'
+)
+
+prepare() {
+  cd "$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --manifest-path packages/virtual-headset/Cargo.toml
+}
+
+build() {
+  cd "$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  unset CARGO_TARGET_DIR
+  cargo build --locked --release --manifest-path packages/virtual-headset/Cargo.toml
+
+  # Build the Firefox bridge from the TypeScript sources. Use the esbuild CLI
+  # directly so the package does not need the npm toolchain; the flags mirror
+  # extension/build.mjs.
+  cp -r extension/static extension/dist
+  esbuild \
+    extension/src/background.ts extension/src/content.ts \
+    --bundle --format=iife --target=firefox115 --outdir=extension/dist
+
+  # Zip from inside the extension directory so manifest.json sits at the
+  # archive root.
+  ( cd extension/dist && zip -r -X "$srcdir/virtual_headset.xpi" . )
+}
+
+check() {
+  cd "$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  unset CARGO_TARGET_DIR
+  cargo test --locked --manifest-path packages/virtual-headset/Cargo.toml
+}
+
+package() {
+  cd "$pkgname"
+
+  install -Dm0755 packages/virtual-headset/target/release/virtual-headset \
+    "$pkgdir/usr/bin/virtual-headset"
+  install -Dm0755 packages/virtual-headset/target/release/virtual-headset-bridge \
+    "$pkgdir/usr/bin/virtual-headset-bridge"
+  install -Dm0755 packages/virtual-headset-ctl/virtual-headset-ctl.nu \
+    "$pkgdir/usr/bin/virtual-headset-ctl"
+
+  # udev rules and the user service. The service is not enabled by the
+  # package: user units are per-session, see the .install message.
+  install -Dm0644 "$srcdir/99-virtual-headset.rules" \
+    "$pkgdir/usr/lib/udev/rules.d/99-virtual-headset.rules"
+  install -Dm0644 "$srcdir/virtual-headset.service" \
+    "$pkgdir/usr/lib/systemd/user/virtual-headset.service"
+
+  # Firefox bridge: unpacked extension, signed-installable zip, and the
+  # native-messaging host installer for non-Nix setups.
+  install -dm0755 "$pkgdir/usr/share/virtual-headset-firefox"
+  cp -r extension/dist "$pkgdir/usr/share/virtual-headset-firefox/extension"
+  install -Dm0644 "$srcdir/virtual_headset.xpi" \
+    "$pkgdir/usr/share/virtual-headset-firefox/virtual_headset.xpi"
+  install -Dm0755 extension/static/install-native-host.sh \
+    "$pkgdir/usr/share/virtual-headset-firefox/install-native-host.sh"
+
+  install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm0644 LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
