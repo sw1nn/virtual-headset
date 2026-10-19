@@ -28,6 +28,10 @@ graph LR
 > For the **native** Zoom desktop client, the existing HID path already works and
 > the extension isn't needed. For Teams, the extension is required unless you use
 > the installed Teams client on Windows or Mac.
+>
+> The bridge currently ships as a Firefox extension. Chromium can use WebHID for
+> Zoom/Meet directly, but Teams in Chromium has no WebHID path and would need a
+> Chromium build of the bridge.
 
 ## Using it
 
